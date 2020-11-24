@@ -1,0 +1,177 @@
+name: Build
+on:
+    push:
+      branches:
+        - '**'
+    pull_request:
+      branches:
+        - main
+    workflow_dispatch:
+jobs:
+  set-matrix:
+    name: Set build matrix
+    runs-on: macos-latest
+    outputs:
+      matrix: ${{steps.get-latest-version-per-series.outputs.matrix}}
+    steps:
+      - id: uninstall-openssl
+        name: Uninstall OpenSSL # https://github.com/actions/virtual-environments/issues/1811
+        run: brew uninstall openssl@1.0.2t
+      - id: checkout-code
+        name: Checkout code
+        uses: actions/checkout@v2
+      - id: get-latest-version-per-series
+        name: Get latest version per series
+        run: |
+          gitHubCredentials="luigiberrettini:${{secrets.GITHUB_TOKEN}}"
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          installPackageDependencies jq >/dev/null 2>&1
+          getMariaDbLatestVersionPerSeries \
+              mariaDbLatestVersionPerSeries \
+              $gitHubCredentials
+          mariaDbLatestVersionPerSeries=$(echo "$mariaDbLatestVersionPerSeries" | tr -d '\n| ')
+          echo "$mariaDbLatestVersionPerSeries"
+          echo "::set-output name=matrix::$mariaDbLatestVersionPerSeries"
+  release-distribution:
+    name: Release distribution
+    needs: set-matrix
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mariadb: ${{fromJson(needs.set-matrix.outputs.matrix)}}
+    steps:
+      - id: uninstall-openssl
+        name: Uninstall OpenSSL # https://github.com/actions/virtual-environments/issues/1811
+        run: brew uninstall openssl@1.0.2t
+      - id: checkout-code
+        name: Checkout code
+        uses: actions/checkout@v2
+      - id: initialize
+        name: Initialize
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          workingDir=$(getRootDir)/work
+          mkdir -p $workingDir
+          prepareForPackageInstallation $workingDir
+          echo "workingDir=$workingDir" >>$GITHUB_ENV
+      - id: install-basic-package-dependencies
+        name: Install basic package dependencies
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          installPackageDependencies jq >/dev/null 2>&1
+      - id: determine-mariadb-version-and-series
+        name: Determine MariaDB version and series
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          mariaDbVersion=$(getMariaDbVersion "$mariaDbLatestVersionPerSeries" ${{matrix.mariadb}})
+          mariaDbSeries=$(getMariaDbSeries $mariaDbVersion)
+          echo "mariaDbVersion=$mariaDbVersion" >>$GITHUB_ENV
+          echo "mariaDbSeries=$mariaDbSeries" >>$GITHUB_ENV
+      - id: prepare-for-execution
+        name: Prepare for execution
+        run: |
+          echo "macOsMinVerToSupport=10.13" >>$GITHUB_ENV # High Sierra (September 2017)
+          echo "gitHubUsername=luigiberrettini" >>$GITHUB_ENV
+          echo "bintrayUsername=luigiberrettini" >>$GITHUB_ENV
+          echo "bintraySubject=luigiberrettini" >>$GITHUB_ENV
+          echo "bintrayRepo=binaries" >>$GITHUB_ENV
+          echo "bintrayPackage=mariadb" >>$GITHUB_ENV
+          echo "force=0" >>$GITHUB_ENV
+          echo "overwrite=0" >>$GITHUB_ENV
+          echo "macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport" >>$GITHUB_ENV
+          echo "openSslSourceDir=$workingDir/openssl/src" >>$GITHUB_ENV
+          echo "openSslCompiledDir=$workingDir/openssl/compiled" >>$GITHUB_ENV
+          echo "mariaDbSourceDir=$workingDir/mariadb/$mariaDbVersion/src" >>$GITHUB_ENV
+          echo "mariaDbBuildDir=$workingDir/mariadb/$mariaDbVersion/build" >>$GITHUB_ENV
+          echo "mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled" >>$GITHUB_ENV
+          echo "mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-macos-$mariaDbVersion.tar.gz" >>$GITHUB_ENV
+          echo "mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified" >>$GITHUB_ENV
+          echo "bintrayVersion=$mariaDbVersion" >>$GITHUB_ENV
+          echo "bintrayFilesPrefix=mariadb-macos-$mariaDbVersion.tar.gz" >>$GITHUB_ENV
+      - id: check-if-the-mariadb-version-has-no-released-binary-distribution
+        name: Check if the MariaDB version has no released binary distribution
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          bintrayCredentials="$bintrayUsername:${{secrets.BINTRAY_API_KEY}}"
+          ensureBinaryDistributionHasNeverBeenReleased \
+              distributionCleanupNeeded \
+              $mariaDbVersion \
+              $bintrayCredentials \
+              $bintraySubject \
+              $bintrayRepo \
+              $bintrayPackage \
+              $bintrayVersion \
+              $bintrayFilesPrefix \
+              $overwrite
+          returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+          echo "distributionCleanupNeeded=$distributionCleanupNeeded" >>$GITHUB_ENV
+      - id: install-build-related-package-dependencies
+        name: Install build related package dependencies
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          installPackageDependencies \
+              jemalloc \
+              traildb/judy/judy \
+              cmake \
+              boost \
+              gnutls
+      - id: install-the-latest-sdk-for-the-minimum-macos-version-to-support
+        name: Install the latest SDK for the minimum macOS version to support
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
+          installMacOsSdk \
+              $gitHubCredentials \
+              $macOsMinVerToSupport \
+              $macOsSdkDir
+      - id: install-the-latest-stable-version-of-openssl-for-this-version-of-mariadb
+        name: Install the latest stable version of OpenSSL for this version of MariaDB
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
+          installOpenSsl \
+              $workingDir \
+              $mariaDbSeries \
+              $gitHubCredentials \
+              $macOsMinVerToSupport \
+              $macOsSdkDir \
+              $openSslSourceDir \
+              $openSslCompiledDir
+      - id: build-mariadb-from-sources
+        name: Build MariaDB from sources
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          buildMariaDb \
+              $workingDir \
+              $mariaDbVersion \
+              $mariaDbSeries \
+              $macOsMinVerToSupport \
+              $macOsSdkDir \
+              $openSslCompiledDir \
+              $mariaDbSourceDir \
+              $mariaDbBuildDir \
+              $mariaDbCompiledDir \
+              $mariaDbPackagePath \
+              $mariaDbVerifiedDir
+      - id: upload-artifact
+        name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          path: ${{env.mariaDbPackagePath}}
+          name: ${{env.bintrayFilesPrefix}}
+      - id: publish-mariadb-binaries
+        name: Publish MariaDB binaries
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          bintrayCredentials="$bintrayUsername:${{secrets.BINTRAY_API_KEY}}"
+          publishMariaDbBinaries \
+              $mariaDbVersion \
+              $mariaDbPackagePath \
+              $bintrayCredentials \
+              $bintraySubject \
+              $bintrayRepo \
+              $bintrayPackage \
+              $bintrayVersion \
+              $bintrayFilesPrefix \
+              $distributionCleanupNeeded
