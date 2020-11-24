@@ -51,7 +51,7 @@ jobs:
         name: Initialize
         run: |
           source ${{github.workspace}}/create-macOS-binaries.sh
-          workingDir=$(getRootDir)/work
+          workingDir=$(getRootDir "${{github.workspace}}")/work
           mkdir -p $workingDir
           prepareForPackageInstallation $workingDir
           echo "workingDir=$workingDir" >>$GITHUB_ENV
@@ -71,14 +71,12 @@ jobs:
       - id: prepare-for-execution
         name: Prepare for execution
         run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
           echo "macOsMinVerToSupport=10.13" >>$GITHUB_ENV # High Sierra (September 2017)
           echo "gitHubUsername=luigiberrettini" >>$GITHUB_ENV
-          echo "bintrayUsername=luigiberrettini" >>$GITHUB_ENV
-          echo "bintraySubject=luigiberrettini" >>$GITHUB_ENV
-          echo "bintrayRepo=binaries" >>$GITHUB_ENV
-          echo "bintrayPackage=mariadb" >>$GITHUB_ENV
           echo "force=0" >>$GITHUB_ENV
           echo "overwrite=0" >>$GITHUB_ENV
+          echo "apiRepoBaseUrl=$(getApiRepoBaseUrl ""${{github.workspace}}"")" >>$GITHUB_ENV
           echo "macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport" >>$GITHUB_ENV
           echo "openSslSourceDir=$workingDir/openssl/src" >>$GITHUB_ENV
           echo "openSslCompiledDir=$workingDir/openssl/compiled" >>$GITHUB_ENV
@@ -87,25 +85,16 @@ jobs:
           echo "mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled" >>$GITHUB_ENV
           echo "mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-macos-$mariaDbVersion.tar.gz" >>$GITHUB_ENV
           echo "mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified" >>$GITHUB_ENV
-          echo "bintrayVersion=$mariaDbVersion" >>$GITHUB_ENV
-          echo "bintrayFilesPrefix=mariadb-macos-$mariaDbVersion.tar.gz" >>$GITHUB_ENV
       - id: check-if-the-mariadb-version-has-no-released-binary-distribution
         name: Check if the MariaDB version has no released binary distribution
         run: |
           source ${{github.workspace}}/create-macOS-binaries.sh
-          bintrayCredentials="$bintrayUsername:${{secrets.BINTRAY_API_KEY}}"
+          gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
           ensureBinaryDistributionHasNeverBeenReleased \
-              distributionCleanupNeeded \
               $mariaDbVersion \
-              $bintrayCredentials \
-              $bintraySubject \
-              $bintrayRepo \
-              $bintrayPackage \
-              $bintrayVersion \
-              $bintrayFilesPrefix \
-              $overwrite
-          returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
-          echo "distributionCleanupNeeded=$distributionCleanupNeeded" >>$GITHUB_ENV
+              $overwrite \
+              $apiRepoBaseUrl \
+              $gitHubCredentials
       - id: install-build-related-package-dependencies
         name: Install build related package dependencies
         run: |
@@ -122,9 +111,9 @@ jobs:
           source ${{github.workspace}}/create-macOS-binaries.sh
           gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
           installMacOsSdk \
-              $gitHubCredentials \
               $macOsMinVerToSupport \
-              $macOsSdkDir
+              $macOsSdkDir \
+              $gitHubCredentials
       - id: install-the-latest-stable-version-of-openssl-for-this-version-of-mariadb
         name: Install the latest stable version of OpenSSL for this version of MariaDB
         run: |
@@ -133,11 +122,11 @@ jobs:
           installOpenSsl \
               $workingDir \
               $mariaDbSeries \
-              $gitHubCredentials \
               $macOsMinVerToSupport \
               $macOsSdkDir \
               $openSslSourceDir \
-              $openSslCompiledDir
+              $openSslCompiledDir \
+              $gitHubCredentials
       - id: build-mariadb-from-sources
         name: Build MariaDB from sources
         run: |
@@ -154,24 +143,13 @@ jobs:
               $mariaDbCompiledDir \
               $mariaDbPackagePath \
               $mariaDbVerifiedDir
-      - id: upload-artifact
-        name: Upload artifact
-        uses: actions/upload-artifact@v2
-        with:
-          path: ${{env.mariaDbPackagePath}}
-          name: ${{env.bintrayFilesPrefix}}
       - id: publish-mariadb-binaries
         name: Publish MariaDB binaries
         run: |
           source ${{github.workspace}}/create-macOS-binaries.sh
-          bintrayCredentials="$bintrayUsername:${{secrets.BINTRAY_API_KEY}}"
+          gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
           publishMariaDbBinaries \
               $mariaDbVersion \
               $mariaDbPackagePath \
-              $bintrayCredentials \
-              $bintraySubject \
-              $bintrayRepo \
-              $bintrayPackage \
-              $bintrayVersion \
-              $bintrayFilesPrefix \
-              $distributionCleanupNeeded
+              $apiRepoBaseUrl \
+              $gitHubCredentials

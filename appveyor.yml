@@ -4,8 +4,6 @@ skip_tags: true
 environment:
   GITHUB_TOKEN:
     secure: PM7wJwGZThzLziNgfuq5T67ntCNpe8guB32XqLYhdQar5oqfSgwsStnFLUkmbU4S
-  BINTRAY_API_KEY:
-    secure: la0hFMrN8r1zN1giApRGeRC4fgqjzOk710NNC/8q9nzbJBCVmT9RZQAjF6fisn9G
   FAILURE_FILE_PATH: /Users/appveyor/projects/failure
   APPVEYOR_SSH_KEY: ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAnMAvqJ5ZECJKLy9MS5tPPE/xizNTSM0c02mkX78M2DP46jgsaYvYo1SIeooPxQZ2AJJ9qkmyq1EVEo+FPLIgrnRLBp6Xr+2Gaw7wYcU5HSJpKR6wy4eETNTDUeSBQO0tqcZSVUCQbeTn+NkXnrDHfnAFGWzrvRmmQTAAaPW2l8VWHd+zCaNNu3yUL/7P1l25oG7f5soodTbPMVCc8joM6yus0bvMLD97oNIka27ysWHp4baLm44Fnthz9eH3r46b2ojr3VVBXwEmCZaoWLaq6Ad3kIJBWAjGViIzP2Lod7OPQuv3gifC0Mc35GJjXUwEKg7JCW3WnIcjz6pfrYw1zw==
   matrix:
@@ -31,26 +29,18 @@ environment:
       maria_db_series: 10.5
 build_script:
   - sh: |
+      source ./create-macOS-binaries.sh
       mariaDbVersion='latest'
       mariaDbSeries=$maria_db_series
       macOsMinVerToSupport='10.13' # High Sierra (September 2017)
       gitHubCredentials="luigiberrettini:$GITHUB_TOKEN"
-      bintrayCredentials="luigiberrettini:$BINTRAY_API_KEY"
-      bintraySubject='luigiberrettini'
-      bintrayRepo='binaries'
-      bintrayPackage='mariadb'
       force=0
       overwrite=0
-      source ./create-macOS-binaries.sh
       releaseMariaDbBinaryDistribution \
           $mariaDbVersion \
           $mariaDbSeries \
           $macOsMinVerToSupport \
           $gitHubCredentials \
-          $bintrayCredentials \
-          $bintraySubject \
-          $bintrayRepo \
-          $bintrayPackage \
           $force \
           $overwrite
       if [ $? -ne 0 ]; then

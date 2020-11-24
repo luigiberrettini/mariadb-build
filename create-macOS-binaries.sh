@@ -5,16 +5,14 @@ function releaseMariaDbBinaryDistribution {
     local mariaDbSeries=${2}
     local macOsMinVerToSupport=${3}
     local gitHubCredentials=${4}
-    local bintrayCredentials=${5}
-    local bintraySubject=${6}
-    local bintrayRepo=${7}
-    local bintrayPackage=${8}
-    local force=0; if [ -n "${9}" ] && [ "${9}" != '0' ]; then force=1; fi
-    local overwrite=0; if [ -n "${10}" ] && [ "${10}" != '0' ]; then overwrite=1; fi
-    if [ "$#" -lt 8 ]; then echo 'Illegal number of arguments'; return 1; fi
+    local force=0; if [ -n "${5}" ] && [ "${5}" != '0' ]; then force=1; fi
+    local overwrite=0; if [ -n "${6}" ] && [ "${6}" != '0' ]; then overwrite=1; fi
+    if [ "$#" -lt 4 ]; then echo 'Illegal number of arguments'; return 1; fi
 
     echo '############################## Initializing'
-    local workingDir=$(getRootDir)/work
+    local repoDir=$(getRepoDir)
+    echo "repoDir: $repoDir"
+    local workingDir=$(getRootDir "$repoDir")/work
     mkdir -p $workingDir
     echo "workingDir: $workingDir"
     prepareForPackageInstallation $workingDir
@@ -43,6 +41,8 @@ function releaseMariaDbBinaryDistribution {
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Preparing for execution'
+    local apiRepoBaseUrl=$(getApiRepoBaseUrl "$repoDir")
+    local macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport
     local macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport
     local openSslSourceDir=$workingDir/openssl/src
     local openSslCompiledDir=$workingDir/openssl/compiled
@@ -51,8 +51,7 @@ function releaseMariaDbBinaryDistribution {
     local mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled
     local mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-macos-$mariaDbVersion.tar.gz
     local mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified
-    local bintrayVersion="$mariaDbVersion"
-    local bintrayFilesPrefix=$(basename $mariaDbPackagePath)
+    echo "apiRepoBaseUrl: $apiRepoBaseUrl"
     echo "macOsSdkDir: $macOsSdkDir"
     echo "openSslSourceDir: $openSslSourceDir"
     echo "openSslCompiledDir: $openSslCompiledDir"
@@ -61,20 +60,13 @@ function releaseMariaDbBinaryDistribution {
     echo "mariaDbCompiledDir: $mariaDbCompiledDir"
     echo "mariaDbPackagePath: $mariaDbPackagePath"
     echo "mariaDbVerifiedDir: $mariaDbVerifiedDir"
-    echo "bintrayVersion: $bintrayVersion"
-    echo "bintrayFilesPrefix: $bintrayFilesPrefix"
 
     echo '############################## Checking if the MariaDB version has no released binary distribution'
     ensureBinaryDistributionHasNeverBeenReleased \
-        distributionCleanupNeeded \
         $mariaDbVersion \
-        $bintrayCredentials \
-        $bintraySubject \
-        $bintrayRepo \
-        $bintrayPackage \
-        $bintrayVersion \
-        $bintrayFilesPrefix \
-        $overwrite
+        $overwrite \
+        $apiRepoBaseUrl \
+        $gitHubCredentials
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Installing build related package dependencies'
@@ -87,20 +79,20 @@ function releaseMariaDbBinaryDistribution {
 
     echo '############################## Installing the latest SDK for the minimum macOS version to support'
     installMacOsSdk \
-        $gitHubCredentials \
         $macOsMinVerToSupport \
-        $macOsSdkDir
+        $macOsSdkDir \
+        $gitHubCredentials
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Installing the latest stable version of OpenSSL for this version of MariaDB'
     installOpenSsl \
         $workingDir \
         $mariaDbSeries \
-        $gitHubCredentials \
         $macOsMinVerToSupport \
         $macOsSdkDir \
         $openSslSourceDir \
-        $openSslCompiledDir
+        $openSslCompiledDir \
+        $gitHubCredentials
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Building MariaDB from sources'
@@ -122,27 +114,43 @@ function releaseMariaDbBinaryDistribution {
     publishMariaDbBinaries \
         $mariaDbVersion \
         $mariaDbPackagePath \
-        $bintrayCredentials \
-        $bintraySubject \
-        $bintrayRepo \
-        $bintrayPackage \
-        $bintrayVersion \
-        $bintrayFilesPrefix \
-        $distributionCleanupNeeded
+        $apiRepoBaseUrl \
+        $gitHubCredentials
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 }
 
-function getRootDir {
+function getRepoDir {
     local scriptDir=$(dirname "${BASH_SOURCE[0]}")
 
     local repoDir="$scriptDir"
     while [ $(ls -Ald "$repoDir/.git" 2>/dev/null | wc -l) -eq 0 ]; do
         repoDir="$repoDir/.."
     done
+    pushd $repoDir >/dev/null
+    repoDir=$(pwd)
+    popd >/dev/null
+    echo "$repoDir"
+}
+
+function getRootDir {
+    local repoDir=${1}
+    if [ "$#" -ne 1 ]; then echo 'Illegal number of arguments'; return 1; fi
+
     pushd $repoDir/.. >/dev/null
     local rootDir=$(pwd)
     popd >/dev/null
     echo "$rootDir"
+}
+
+function getApiRepoBaseUrl {
+    local repoDir=${1}
+    if [ "$#" -ne 1 ]; then echo 'Illegal number of arguments'; return 1; fi
+
+    pushd $repoDir >/dev/null
+    # https://api.github.com/repos/:owner/:repo
+    local apiRepoBaseUrl=$(git remote get-url origin | sed -e 's/github.com/api.github.com\/repos/' -e 's/\.git$//')
+    popd >/dev/null
+    echo "$apiRepoBaseUrl"
 }
 
 function prepareForPackageInstallation {
@@ -233,57 +241,36 @@ function ensureMariaDbVersionIsTheMostRecent {
 }
 
 function ensureBinaryDistributionHasNeverBeenReleased {
-    local distributionCleanupNeededResultVar=${1}
-    local mariaDbVersion=${2}
-    local bintrayCredentials=${3}
-    local bintraySubject=${4}
-    local bintrayRepo=${5}
-    local bintrayPackage=${6}
-    local bintrayVersion=${7}
-    local bintrayFilesPrefix=${8}
-    local overwrite=${9}
-    if [ "$#" -ne 9 ]; then echo 'Illegal number of arguments'; return 1; fi
+    local mariaDbVersion=${1}
+    local overwrite=${2}
+    local apiRepoBaseUrl=${3}
+    local gitHubCredentials=${4}
+    if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
 
-    local filesUrl="https://api.bintray.com/packages/$bintraySubject/$bintrayRepo/$bintrayPackage/versions/$bintrayVersion/files"
-    local distributionStatusJqExpr='(arrays | map(select(.name | test("^'"$bintrayFilesPrefix"'.chunk-a$"))) | length)
-        // (if . | has("message") and (.message | test("^Version '"'$bintrayVersion'"' was not found$")) then -1 else null end)'
-    queryApi distributionStatus "$bintrayCredentials" "$filesUrl" "$distributionStatusJqExpr"
+    local tag="v$mariaDbVersion"
+    local releaseForTagUrl="$apiRepoBaseUrl/releases/tags/$tag"
+    local binaryFilePresentJqExpr='.assets // [] | map(select(.name | test("\\.tar\\.gz$")) | .name) | has(0)'
+    queryApi binaryFilePresent "$gitHubCredentials" "$releaseForTagUrl" "$binaryFilePresentJqExpr"
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
-
-    if [ $distributionStatus -eq -1 ]; then
+    if [ "$binaryFilePresent" == 'false' ]; then
         echo "A binary distribution for MariaDB $mariaDbVersion has never been released"
         echo 'Proceeding with the build (no cleanup needed)'
-        eval $distributionCleanupNeededResultVar=0
         return 0
-    fi
-
-    if [ $distributionStatus -eq 0 ]; then
-        echo "A binary distribution for MariaDB $mariaDbVersion has never been released"
-        echo 'Proceeding with the build (some cleanup needed)'
-        eval $distributionCleanupNeededResultVar=1
-        return 0
-    fi
-
-    if [ $distributionStatus -eq 1 ]; then
+    else
         echo "A binary distribution for MariaDB $mariaDbVersion has already been released"
         if [ $overwrite -eq 1 ]; then
             echo 'Proceeding with the build (overwrite flag set)'
-            eval $distributionCleanupNeededResultVar=1
             return 0
         fi
         echo 'Stopping the build'
-        eval $distributionCleanupNeededResultVar=1
-        return 1
+        exit 0
     fi
-
-    echo 'Unsupported distribution status'
-    return 1
 }
 
 function installMacOsSdk {
-    local gitHubCredentials=${1}
-    local macOsMinVerToSupport=${2}
-    local macOsSdkDir=${3}
+    local macOsMinVerToSupport=${1}
+    local macOsSdkDir=${2}
+    local gitHubCredentials=${3}
     if [ "$#" -ne 3 ]; then echo 'Illegal number of arguments'; return 1; fi
 
     echo '########## Determining download URL'
@@ -302,11 +289,11 @@ function installMacOsSdk {
 function installOpenSsl {
     local workingDir=${1}
     local mariaDbSeries=${2}
-    local gitHubCredentials=${3}
-    local macOsMinVerToSupport=${4}
-    local macOsSdkDir=${5}
-    local openSslSourceDir=${6}
-    local openSslCompiledDir=${7}
+    local macOsMinVerToSupport=${3}
+    local macOsSdkDir=${4}
+    local openSslSourceDir=${5}
+    local openSslCompiledDir=${6}
+    local gitHubCredentials=${7}
     if [ "$#" -ne 7 ]; then echo 'Illegal number of arguments'; return 1; fi
 
     echo '########## Determining download URL'
@@ -560,72 +547,93 @@ function buildMariaDb {
 function publishMariaDbBinaries {
     local mariaDbVersion=${1}
     local mariaDbPackagePath=${2}
-    local bintrayCredentials=${3}
-    local bintraySubject=${4}
-    local bintrayRepo=${5}
-    local bintrayPackage=${6}
-    local bintrayVersion=${7}
-    local bintrayFilesPrefix=${8}
-    local distributionCleanupNeeded=${9}
-    if [ "$#" -ne 9 ]; then echo 'Illegal number of arguments'; return 1; fi
+    local apiRepoBaseUrl=${3}
+    local gitHubCredentials=${4}
+    if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
 
-    local bintraySubjectRepoPackage="$bintraySubject/$bintrayRepo/$bintrayPackage"
+    local tag="v$mariaDbVersion"
 
-    if [ $distributionCleanupNeeded -eq 0 ]; then
-        echo '########## Creating Bintray version'
-        local createVersionUrl="https://api.bintray.com/packages/$bintraySubjectRepoPackage/versions"
-        local createVersionBody="{ \"name\": \"$bintrayVersion\", \"desc\": \"MariaDB $mariaDbVersion macOS binary distribution\" }"
-        local response=$(curl -s -S -L -i -X POST \
-            -H 'Content-Type: application/json' \
-            --data "$createVersionBody" \
-            -u "$bintrayCredentials" \
-            "$createVersionUrl" \
-            2>&1)
-        echo "$response" | grep -iq '201 Created'
-        local returnValue=$?
-        if [ $returnValue -ne 0 ]; then
-            echo "Bintray package '/packages/$bintraySubjectRepoPackage': unable to create version $bintrayVersion"
-            printf "Response\n$response\n"
-            return $returnValue
+    echo '########## Deleting the release if already existent'
+    local releaseForTagUrl="$apiRepoBaseUrl/releases/tags/$tag"
+    local releaseIdForTagJqExpr='.id // "missingRelease"'
+    queryApi releaseIdForTag "$gitHubCredentials" "$releaseForTagUrl" "$releaseIdForTagJqExpr"
+    local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+    if [ "$releaseIdForTag" == 'missingRelease' ]; then
+        echo "No release to delete for tag '$tag'"
+    else
+        local deleteReleaseUrl="$apiRepoBaseUrl/releases/$releaseIdForTag"
+        local response=$(curl -s -S -L -i -X DELETE -u "$gitHubCredentials" "$deleteReleaseUrl" 2>&1)
+        if ! echo "$response" | grep -iq '204 No Content'; then
+            printf "Unable to delete release '$releaseIdForTag'\n\n$response\n"
+            return 1
         fi
+        echo "Deleted release '$releaseIdForTag'"
+
+        local deleteTagUrl="$apiRepoBaseUrl/git/refs/tags/$tag"
+        local response=$(curl -s -S -L -i -X DELETE -u "$gitHubCredentials" "$deleteTagUrl" 2>&1)
+        if ! echo "$response" | grep -iq '204 No Content'; then
+            printf "Unable to delete tag '$tag'\n\n$response\n"
+            return 1
+        fi
+        echo "Deleted tag '$tag'"
     fi
 
+    echo '########## Creating the release'
+    local createReleaseUrl="$apiRepoBaseUrl/releases"
+    local releaseDescription="MariaDB $mariaDbVersion macOS binary distribution"
+    local createReleaseBody="{ \"name\": \"$mariaDbVersion\", \"tag_name\": \"$tag\", \"body\": \"$releaseDescription\" }"
+    local response=$(curl -s -S -L -i -X POST \
+        -H 'Content-Type: application/json' \
+        --data "$createReleaseBody" \
+        -u "$gitHubCredentials" \
+        "$createReleaseUrl" \
+        2>&1)
+    if ! echo "$response" | grep -iq '201 Created'; then
+        printf "Unable to create the release\n\n$response\n"
+        return 1
+    fi
+    local uploadUrl=$(echo "$response" | grep 'upload_url' | awk '{ print $2 }' | tr -d ',' | jq -r 'split("{")[0]')
+    echo "Upload URL: '$uploadUrl'"
+
     echo '########## Retrieving binary archive info'
-    echo "Name: $(basename $mariaDbPackagePath)"
-    echo "Size: $(du -h $mariaDbPackagePath | awk '{ print $1 }' | sed -E 's/^([0-9]+)(M|G)$/\1 \2iB/')"
+    local name=$(basename $mariaDbPackagePath)
+    local size=$(du -h $mariaDbPackagePath | awk '{ print $1 }' | sed -E 's/^([0-9]+)(M|G)$/\1 \2iB/')
+    local md5Checksum=$(md5 -r $mariaDbPackagePath | awk '{ print $1 }' | tee "$mariaDbPackagePath.md5")
+    local sha1Checksum=$(shasum -a 1 $mariaDbPackagePath | awk '{ print $1 }' | tee "$mariaDbPackagePath.sha1")
+    local sha256Checksum=$(shasum -a 256 $mariaDbPackagePath | awk '{ print $1 }' | tee "$mariaDbPackagePath.sha256")
+    local sha512Checksum=$(shasum -a 512 $mariaDbPackagePath | awk '{ print $1 }' | tee "$mariaDbPackagePath.sha512")
+    echo "Name: $name"
+    echo "Size: $size"
+    echo "MD5: $md5Checksum"
+    echo "SHA1: $sha1Checksum"
+    echo "SHA256: $sha256Checksum"
+    echo "SHA512: $sha512Checksum"
 
-    echo '########## Splitting binary archive in 200 MiB chunks to avoid hitting Bintray upload limit'
-    split -b 200m -a 1 $mariaDbPackagePath $mariaDbPackagePath.chunk-
-    local returnValue=$?; if [ $returnValue -ne 0 ]; then popd >/dev/null; return $returnValue; fi
-    for file in $mariaDbPackagePath.chunk-?; do basename $file; done
+    echo '########## Uploading binary archive'
+    local uploadAssetUrl="$uploadUrl?name=$name"
+    local response=$(curl -s -S -L -i -X POST \
+        -H 'Content-Type: application/gzip' \
+        -T "$mariaDbPackagePath" \
+        -u "$gitHubCredentials" \
+        "$uploadAssetUrl" \
+        2>&1)
+    if ! echo "$response" | grep -iq '201 Created'; then
+        printf "Unable to upload the file '$mariaDbPackagePath'\n\n$response\n"
+        return 1
+    fi
 
-    echo '########## Uploading files to Bintray'
-    local bintrayNameSedExpr="s/$(basename $mariaDbPackagePath)/$bintrayFilesPrefix/"
+    echo '########## Uploading checksum files'
     for file in $mariaDbPackagePath.*; do
-        local localName=$(basename $file)
-        local bintrayName=$(echo $localName | sed -E "$bintrayNameSedExpr")
-        local sha1Checksum=$(shasum -a 1 $file | awk '{ print $1 }')
-        local sha256Checksum=$(shasum -a 256 $file | awk '{ print $1 }')
-        echo "### $localName"
-        echo "Bintray name: $bintrayName"
-        echo "SHA1: $sha1Checksum"
-        echo "SHA256: $sha256Checksum"
-
-        local uploadContentUrl="https://api.bintray.com/content/$bintraySubjectRepoPackage/$bintrayVersion/$bintrayName"
-        local uploadContentQueryString="publish=1&override=$distributionCleanupNeeded"
-        local response=$(curl -s -S -L -i -X PUT \
-            -H "X-Checksum-Sha1:$sha1Checksum" \
-            -H "X-Checksum-Sha2:$sha256Checksum" \
+        local uploadAssetUrl="$uploadUrl?name=$(basename $file)"
+        local response=$(curl -s -S -L -i -X POST \
+            -H 'Content-Type: text/plain' \
             -T "$file" \
-            -u "$bintrayCredentials" \
-            "$uploadContentUrl?$uploadContentQueryString" \
+            -u "$gitHubCredentials" \
+            "$uploadAssetUrl" \
             2>&1)
-        echo "$response" | grep -iq '201 Created'
-        local returnValue=$?
-        if [ $returnValue -ne 0 ]; then
-            echo "Bintray package '/packages/$bintraySubjectRepoPackage': unable to upload content '$bintrayVersion/$bintrayName'"
-            printf "Response\n$response\n"
-            return $returnValue
+        if ! echo "$response" | grep -iq '201 Created'; then
+            printf "Unable to upload the file '$file'\n\n$response\n"
+            return 1
         fi
     done
 }
@@ -654,7 +662,7 @@ function queryApi {
     local jqExpression=${4}
     if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
 
-    local onelineJqExpression=$(echo $jqExpression | tr -d '\n' | sed -E 's/\s{2}//g')
+    local onelineJqExpression=$(echo $jqExpression | tr -d '\n' | sed -E 's/  //g')
 
     local curlResult=0 # declaration and assignment split to prevent $? from being always 0
     curlResult=$(curl -s -S -L -X GET -u "$credentials" "$url" 2>&1)
