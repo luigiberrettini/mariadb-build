@@ -527,11 +527,11 @@ function buildMariaDb {
 
     echo '########## Packaging binaries'
     mkdir -p $(dirname $mariaDbPackagePath)
-    tar -C $mariaDbCompiledDir -chf $mariaDbPackagePath ./
+    tar -C $mariaDbCompiledDir -zchf $mariaDbPackagePath .
 
     echo '########## Verifying binaries'
     mkdir -p $mariaDbVerifiedDir
-    tar -C $mariaDbVerifiedDir -xf $mariaDbPackagePath
+    tar -C $mariaDbVerifiedDir -zxf $mariaDbPackagePath
     local mysqlInstallDbPath=$(find $mariaDbVerifiedDir -maxdepth 2 -type f -name mysql_install_db)
     $(dirname $mysqlInstallDbPath)/mysql_install_db \
         --no-defaults \
