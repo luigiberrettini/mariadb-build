@@ -15,10 +15,12 @@ function releaseMariaDbBinaryDistribution {
     local workingDir=$(getRootDir "$repoDir")/work
     mkdir -p $workingDir
     echo "workingDir: $workingDir"
+    local apiRepoBaseUrl=$(getApiRepoBaseUrl "$repoDir")
+    echo "apiRepoBaseUrl: $apiRepoBaseUrl"
     prepareForPackageInstallation $workingDir
 
     echo '############################## Installing basic package dependencies'
-    installPackageDependencies jq >/dev/null 2>&1
+    installPackageDependencies jq
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Determining the latest version for each MariaDB series'
@@ -28,45 +30,40 @@ function releaseMariaDbBinaryDistribution {
         && echo $mariaDbLatestVersionPerSeries
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
+    echo '############################## Determining the latest binary distribution released for each MariaDB series'
+    getMariaDbLatestBinaryDistributionPerSeries \
+        mariaDbLatestDistributionPerSeries \
+        $apiRepoBaseUrl \
+        $gitHubCredentials \
+        && echo $mariaDbLatestDistributionPerSeries
+    local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+
+    echo '############################## Determining the binary distributions to be released'
+    getMariaDbBinaryDistributionsToRelease \
+        mariaDbDistributionsToRelease \
+        $mariaDbLatestVersionPerSeries \
+        $mariaDbLatestDistributionPerSeries \
+        $overwrite \
+        && echo $mariaDbDistributionsToRelease
+    local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+
     echo '############################## Determining MariaDB version and series'
-    mariaDbVersion=$(getMariaDbVersion "$mariaDbLatestVersionPerSeries" $mariaDbVersion $mariaDbSeries)
+    mariaDbVersion=$(getMariaDbVersion $mariaDbLatestVersionPerSeries $mariaDbVersion $mariaDbSeries)
     mariaDbSeries=$(getMariaDbSeries $mariaDbVersion)
     echo "MariaDB $mariaDbVersion ($mariaDbSeries series)"
 
     echo '############################## Checking if a MariaDB build was requested for the latest version of the series'
     ensureMariaDbVersionIsTheMostRecent \
         $mariaDbVersion \
-        "$mariaDbLatestVersionPerSeries" \
+        $mariaDbLatestVersionPerSeries \
         $force
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
-
-    echo '############################## Preparing for execution'
-    local apiRepoBaseUrl=$(getApiRepoBaseUrl "$repoDir")
-    local macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport
-    local macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport
-    local openSslSourceDir=$workingDir/openssl/src
-    local openSslCompiledDir=$workingDir/openssl/compiled
-    local mariaDbSourceDir=$workingDir/mariadb/$mariaDbVersion/src
-    local mariaDbBuildDir=$workingDir/mariadb/$mariaDbVersion/build
-    local mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled
-    local mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-macos-$mariaDbVersion.tar.gz
-    local mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified
-    echo "apiRepoBaseUrl: $apiRepoBaseUrl"
-    echo "macOsSdkDir: $macOsSdkDir"
-    echo "openSslSourceDir: $openSslSourceDir"
-    echo "openSslCompiledDir: $openSslCompiledDir"
-    echo "mariaDbSourceDir: $mariaDbSourceDir"
-    echo "mariaDbBuildDir: $mariaDbBuildDir"
-    echo "mariaDbCompiledDir: $mariaDbCompiledDir"
-    echo "mariaDbPackagePath: $mariaDbPackagePath"
-    echo "mariaDbVerifiedDir: $mariaDbVerifiedDir"
 
     echo '############################## Checking if the MariaDB version has no released binary distribution'
     ensureBinaryDistributionHasNeverBeenReleased \
         $mariaDbVersion \
-        $overwrite \
-        $apiRepoBaseUrl \
-        $gitHubCredentials
+        $mariaDbDistributionsToRelease \
+        $overwrite
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
 
     echo '############################## Installing build related package dependencies'
@@ -76,6 +73,24 @@ function releaseMariaDbBinaryDistribution {
         cmake \
         boost \
         gnutls
+
+    echo '############################## Preparing for execution'
+    local macOsSdkDir="$workingDir/macossdk/$macOsMinVerToSupport"
+    local openSslSourceDir="$workingDir/openssl/src"
+    local openSslCompiledDir="$workingDir/openssl/compiled"
+    local mariaDbSourceDir="$workingDir/mariadb/$mariaDbVersion/src"
+    local mariaDbBuildDir="$workingDir/mariadb/$mariaDbVersion/build"
+    local mariaDbCompiledDir="$workingDir/mariadb/$mariaDbVersion/compiled"
+    local mariaDbPackagePath="$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-$mariaDbVersion-macos.tar.gz"
+    local mariaDbVerifiedDir="$workingDir/mariadb/$mariaDbVersion/verified"
+    echo "macOsSdkDir: $macOsSdkDir"
+    echo "openSslSourceDir: $openSslSourceDir"
+    echo "openSslCompiledDir: $openSslCompiledDir"
+    echo "mariaDbSourceDir: $mariaDbSourceDir"
+    echo "mariaDbBuildDir: $mariaDbBuildDir"
+    echo "mariaDbCompiledDir: $mariaDbCompiledDir"
+    echo "mariaDbPackagePath: $mariaDbPackagePath"
+    echo "mariaDbVerifiedDir: $mariaDbVerifiedDir"
 
     echo '############################## Installing the latest SDK for the minimum macOS version to support'
     installMacOsSdk \
@@ -170,11 +185,14 @@ function installPackageDependencies {
     for package in "$@"; do
         repoToTap=$(dirname $package)
         if [ "$repoToTap" != '.' ] && ! echo "$tappedRepos" | grep -iq "$repoToTap"; then
-            brew tap "$repoToTap" >/dev/null
+            brew tap "$repoToTap" >/dev/null 2>&1
         fi
         formula=$(basename $package)
-        if ! brew list --versions $formula | grep -q $formula; then
-            brew install $formula | grep -v '# 100.0%'
+        if brew list --versions $formula | grep -q $formula; then
+            echo "Skipping installation of formula '$formula'"
+        else
+            echo "Installing formula '$formula'"
+            brew install $formula >/dev/null 2>&1
         fi
     done
 }
@@ -185,17 +203,56 @@ function getMariaDbLatestVersionPerSeries {
     if [ "$#" -ne 2 ]; then echo 'Illegal number of arguments'; return 1; fi
 
     local mariaDbTagsUrl='https://api.github.com/repos/MariaDB/server/git/refs/tags'
-    local mariaDbLatestStableVersionJqExpr='map(.ref | ltrimstr("refs/tags/"))
+    local mariaDbLatestVersionsJqExpr='map(.ref | ltrimstr("refs/tags/"))
         | map(select(. | test("^mariadb-\\d+\\.\\d+\\.\\d+$")) | ltrimstr("mariadb-") | split("."))
-        | map({ version: (.[0] + "." + .[1] + "." + .[2]), series: (.[0] + "." + .[1]), major: .[0], minor: .[1], patch: .[2] })
+        | map({ series: (.[0] + "." + .[1]), major: .[0], minor: .[1], patch: .[2] })
         | group_by(.series)
         | sort_by((.[0].major | tonumber), (.[0].minor | tonumber))
-        | map({ series: .[0].series, latestVersion: . | sort_by(-(.patch | tonumber)) | .[0].version })
+        | map({ series: .[0].series, latestVersion: . | sort_by(-(.patch | tonumber)) | (.[0].series + "." + .[0].patch) })
         | map(.latestVersion)'
-    queryApi mariaDbLatestStableVersions "$gitHubCredentials" "$mariaDbTagsUrl" "$mariaDbLatestStableVersionJqExpr"
+    queryApi mariaDbLatestVersions "$gitHubCredentials" "$mariaDbTagsUrl" "$mariaDbLatestVersionsJqExpr"
     local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+    mariaDbLatestVersions=$(echo $mariaDbLatestVersions | tr -d '\n| ')
 
-    eval $resultVar="'$mariaDbLatestStableVersions'"
+    eval $resultVar="'$mariaDbLatestVersions'"
+}
+
+function getMariaDbLatestBinaryDistributionPerSeries {
+    local resultVar=${1}
+    local apiRepoBaseUrl=${2}
+    local gitHubCredentials=${3}
+    if [ "$#" -ne 3 ]; then echo 'Illegal number of arguments'; return 1; fi
+
+    local releasesUrl="$apiRepoBaseUrl/releases"
+    local latestDistributionsJqExpr='map({ assets: (.assets // [] | map(.name)), version: .tag_name | ltrimstr("v")})
+        | map(select(.assets | map(select(. | test("\\.tar\\.gz$"))) | has(0)) | .version | split("."))
+        | map({ series: (.[0] + "." + .[1]), major: .[0], minor: .[1], patch: .[2] })
+        | group_by(.series)
+        | sort_by((.[0].major | tonumber), (.[0].minor | tonumber))
+        | map({ series: .[0].series, latestVersion: . | sort_by(-(.patch | tonumber)) | (.[0].series + "." + .[0].patch) })
+        | map(.latestVersion)'
+    queryApi latestDistributions "$gitHubCredentials" "$releasesUrl" "$latestDistributionsJqExpr"
+    local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
+    latestDistributions=$(echo $latestDistributions | tr -d '\n| ')
+
+    eval $resultVar="'$latestDistributions'"
+}
+
+function getMariaDbBinaryDistributionsToRelease {
+    local resultVar=${1}
+    local mariaDbLatestVersionPerSeries=${2}
+    local mariaDbLatestDistributionPerSeries=${3}
+    local overwrite=${4}
+    if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
+
+    if [ $overwrite -eq 1 ]; then
+        local distributionsToRelease=$mariaDbLatestVersionPerSeries
+    else
+        local distributionsToRelease=$(echo "$mariaDbLatestVersionPerSeries" | jq -r ". - $mariaDbLatestDistributionPerSeries")
+    fi
+    distributionsToRelease=$(echo $distributionsToRelease | tr -d '\n| ')
+
+    eval $resultVar="'$distributionsToRelease'"
 }
 
 function getMariaDbVersion {
@@ -221,11 +278,11 @@ function getMariaDbSeries {
 
 function ensureMariaDbVersionIsTheMostRecent {
     local mariaDbVersion=${1}
-    local mariaDbLatestStableVersions=${2}
+    local mariaDbLatestVersionPerSeries=${2}
     local force=${3}
     if [ "$#" -ne 3 ]; then echo 'Illegal number of arguments'; return 1; fi
 
-    if echo "$mariaDbLatestStableVersions" | jq -r '.[]' | grep -q "$mariaDbVersion"; then
+    if echo "$mariaDbLatestVersionPerSeries" | jq -r '.[]' | grep -q "$mariaDbVersion"; then
         echo "MariaDB $mariaDbVersion is the most recent version of the series"
         echo 'Proceeding with the build'
         return 0
@@ -236,35 +293,31 @@ function ensureMariaDbVersionIsTheMostRecent {
         echo 'Proceeding with the build (force flag set)'
         return 0
     fi
+
     echo 'Stopping the build'
     return 1
 }
 
 function ensureBinaryDistributionHasNeverBeenReleased {
     local mariaDbVersion=${1}
-    local overwrite=${2}
-    local apiRepoBaseUrl=${3}
-    local gitHubCredentials=${4}
-    if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
+    local mariaDbDistributionsToRelease=${2}
+    local overwrite=${3}
+    if [ "$#" -ne 3 ]; then echo 'Illegal number of arguments'; return 1; fi
 
-    local tag="v$mariaDbVersion"
-    local releaseForTagUrl="$apiRepoBaseUrl/releases/tags/$tag"
-    local binaryFilePresentJqExpr='.assets // [] | map(select(.name | test("\\.tar\\.gz$")) | .name) | has(0)'
-    queryApi binaryFilePresent "$gitHubCredentials" "$releaseForTagUrl" "$binaryFilePresentJqExpr"
-    local returnValue=$?; if [ $returnValue -ne 0 ]; then return $returnValue; fi
-    if [ "$binaryFilePresent" == 'false' ]; then
-        echo "A binary distribution for MariaDB $mariaDbVersion has never been released"
-        echo 'Proceeding with the build (no cleanup needed)'
+    if echo "$mariaDbDistributionsToRelease" | jq -r '.[]' | grep -q "$mariaDbVersion"; then
+        Write-Information "A binary distribution for MariaDB $MariaDbVersion has never been released"
+        Write-Information 'Proceeding with the build (no cleanup needed)'
         return 0
-    else
-        echo "A binary distribution for MariaDB $mariaDbVersion has already been released"
-        if [ $overwrite -eq 1 ]; then
-            echo 'Proceeding with the build (overwrite flag set)'
-            return 0
-        fi
-        echo 'Stopping the build'
-        exit 0
     fi
+
+    echo "A binary distribution for MariaDB $mariaDbVersion has already been released"
+    if [ $overwrite -eq 1 ]; then
+        echo 'Proceeding with the build (overwrite flag set)'
+        return 0
+    fi
+
+    echo 'Stopping the build'
+    return 1
 }
 
 function installMacOsSdk {
@@ -322,7 +375,7 @@ function installOpenSsl {
     pushd $openSslSourceDir >/dev/null
     mkdir -p $openSslCompiledDir
 
-    echo '########## Configuring'
+    echo '########## Preparing for compilation'
     if [ "$openSslSeries" == '1.0' ]; then
         ./Configure \
             darwin64-x86_64-cc \
@@ -349,25 +402,28 @@ function installOpenSsl {
 
     echo '########## Compiling'
     startShowingProgress $workingDir
-    make >$workingDir/openssl-make-log.txt 2>&1
+    local makeLog=$workingDir/openssl-make-log.txt
+    make >$makeLog 2>&1
     local returnValue=$?
     stopShowingProgress $workingDir
-    if [ $returnValue -ne 0 ]; then cat $workingDir/openssl-make-log.txt; popd >/dev/null; return $returnValue; fi
+    if [ $returnValue -ne 0 ]; then cat $makeLog; popd >/dev/null; return $returnValue; fi
 
     echo '########## Testing'
     startShowingProgress $workingDir
-    make test >$workingDir/openssl-test-log.txt 2>&1
+    local testLog=$workingDir/openssl-test-log.txt
+    make test >$testLog 2>&1
     local returnValue=$?
     stopShowingProgress $workingDir
-    cat $workingDir/openssl-test-log.txt | grep 'OpenSSL 1.0\|Result'
-    if [ $returnValue -ne 0 ]; then cat $workingDir/openssl-test-log.txt; popd >/dev/null; return $returnValue; fi
+    if [ $returnValue -ne 0 ]; then cat $testLog; popd >/dev/null; return $returnValue; fi
+    cat $testLog | grep 'OpenSSL 1.0\|Result'
 
     echo '########## Installing'
     startShowingProgress $workingDir
-    make install >$workingDir/openssl-install-log.txt 2>&1
+    local installLog=$workingDir/openssl-install-log.txt
+    make install >$installLog 2>&1
     local returnValue=$?
     stopShowingProgress $workingDir
-    if [ $returnValue -ne 0 ]; then cat $workingDir/openssl-install-log.txt; popd >/dev/null; return $returnValue; fi
+    if [ $returnValue -ne 0 ]; then cat $installLog; popd >/dev/null; return $returnValue; fi
 
     popd >/dev/null
 }
@@ -495,35 +551,38 @@ function buildMariaDb {
 
     echo '########## Compiling'
     startShowingProgress $workingDir
-    LC_ALL=C make >$workingDir/mariadb-make-log.txt 2>&1
+    local makeLog=$workingDir/mariadb-make-log.txt
+    LC_ALL=C make >$makeLog 2>&1
     local returnValue=$?
     stopShowingProgress $workingDir
-    if [ $returnValue -ne 0 ]; then cat $workingDir/mariadb-make-log.txt; popd >/dev/null; return $returnValue; fi
+    if [ $returnValue -ne 0 ]; then cat $makeLog; popd >/dev/null; return $returnValue; fi
 
     echo '########## Testing'
     local returnValue=0
     startShowingProgress $workingDir
+    local testLog=$workingDir/mariadb-test-log.txt
     if [ "$mariaDbSeries" == '5.1' ] || [ "$mariaDbSeries" == '5.2' ] || [ "$mariaDbSeries" == '5.3' ]; then
         pushd $mariaDbSourceDir/mysql-test >/dev/null
-        if ! ./mysql-test-run.pl --force --parallel=8 --skip-rpl >$workingDir/mariadb-test-log.txt 2>&1; then returnValue=1; fi
+        if ! ./mysql-test-run.pl --force --parallel=8 --skip-rpl >$testLog 2>&1; then returnValue=1; fi
         popd >/dev/null
     else
-        make test >$workingDir/mariadb-test-log.txt 2>&1
+        make test >$testLog 2>&1
         returnValue=$?
     fi
     stopShowingProgress $workingDir
     if [ $returnValue -eq 0 ]; then
-        cat $workingDir/mariadb-test-log.txt | grep 'failed out of\|were successful'
+        cat $testLog | grep 'failed out of\|were successful'
     else
-        cat $workingDir/mariadb-test-log.txt
+        cat $testLog
     fi
 
     echo '########## Installing'
     startShowingProgress $workingDir
-    make install >$workingDir/mariadb-install-log.txt 2>&1
+    local installLog=$workingDir/mariadb-install-log.txt
+    make install >$installLog 2>&1
     local returnValue=$?
     stopShowingProgress $workingDir
-    if [ $returnValue -ne 0 ]; then cat $workingDir/mariadb-install-log.txt; popd >/dev/null; return $returnValue; fi
+    if [ $returnValue -ne 0 ]; then cat $installLog; popd >/dev/null; return $returnValue; fi
 
     echo '########## Packaging binaries'
     mkdir -p $(dirname $mariaDbPackagePath)
@@ -580,7 +639,7 @@ function publishMariaDbBinaries {
 
     echo '########## Creating the release'
     local createReleaseUrl="$apiRepoBaseUrl/releases"
-    local releaseDescription="MariaDB $mariaDbVersion macOS binary distribution"
+    local releaseDescription="MariaDB $mariaDbVersion binary distribution"
     local createReleaseBody="{ \"name\": \"$mariaDbVersion\", \"tag_name\": \"$tag\", \"body\": \"$releaseDescription\" }"
     local response=$(curl -s -S -L -i -X POST \
         -H 'Content-Type: application/json' \
@@ -658,24 +717,24 @@ function stopShowingProgress {
 function queryApi {
     local resultVar=${1}
     local credentials=${2}
-    local url=${3}
+    local uri=${3}
     local jqExpression=${4}
     if [ "$#" -ne 4 ]; then echo 'Illegal number of arguments'; return 1; fi
 
     local onelineJqExpression=$(echo $jqExpression | tr -d '\n' | sed -E 's/  //g')
 
     local curlResult=0 # declaration and assignment split to prevent $? from being always 0
-    curlResult=$(curl -s -S -L -X GET -u "$credentials" "$url" 2>&1)
+    curlResult=$(curl -s -S -L -X GET -u "$credentials" "$uri" 2>&1)
     if [ $? -ne 0 ]; then
-        echo "Unable to query '$url' and parse response with the jq expression '$onelineJqExpression'"
+        echo "Unable to query '$uri' and parse response with the jq expression '$onelineJqExpression'"
         echo "curlResult: $curlResult"
         return 1
     fi
 
     local jqResult=0 # declaration and assignment split to prevent $? from being always 0
     jqResult=$(echo $curlResult | jq -r "$jqExpression" 2>&1)
-    if [ $? -ne 0 ] || [ "$result" == 'null' ]; then
-        echo "Unable to query '$url' and parse response with the jq expression '$onelineJqExpression'"
+    if [ $? -ne 0 ] || [ "$jqResult" == 'null' ]; then
+        echo "Unable to query '$uri' and parse response with the jq expression '$onelineJqExpression'"
         echo "curlResult: $curlResult"
         echo "jqResult: $jqResult"
         return 1

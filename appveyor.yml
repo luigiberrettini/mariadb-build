@@ -1,56 +1,128 @@
 version: Build {build}
-image: macos
 skip_tags: true
 environment:
   GITHUB_TOKEN:
     secure: PM7wJwGZThzLziNgfuq5T67ntCNpe8guB32XqLYhdQar5oqfSgwsStnFLUkmbU4S
-  FAILURE_FILE_PATH: /Users/appveyor/projects/failure
   APPVEYOR_SSH_KEY: ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAnMAvqJ5ZECJKLy9MS5tPPE/xizNTSM0c02mkX78M2DP46jgsaYvYo1SIeooPxQZ2AJJ9qkmyq1EVEo+FPLIgrnRLBp6Xr+2Gaw7wYcU5HSJpKR6wy4eETNTDUeSBQO0tqcZSVUCQbeTn+NkXnrDHfnAFGWzrvRmmQTAAaPW2l8VWHd+zCaNNu3yUL/7P1l25oG7f5soodTbPMVCc8joM6yus0bvMLD97oNIka27ysWHp4baLm44Fnthz9eH3r46b2ojr3VVBXwEmCZaoWLaq6Ad3kIJBWAjGViIzP2Lod7OPQuv3gifC0Mc35GJjXUwEKg7JCW3WnIcjz6pfrYw1zw==
   matrix:
-    - job_name: Release distribution (5.1.x)
+    - job_name: Release macOS distribution (5.1.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 5.1
-    - job_name: Release distribution (5.2.x)
+    - job_name: Release macOS distribution (5.2.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 5.2
-    - job_name: Release distribution (5.3.x)
+    - job_name: Release macOS distribution (5.3.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 5.3
-    - job_name: Release distribution (5.5.x)
+    - job_name: Release macOS distribution (5.5.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 5.5
-    - job_name: Release distribution (10.0.x)
+    - job_name: Release macOS distribution (10.0.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.0
-    - job_name: Release distribution (10.1.x)
+    - job_name: Release macOS distribution (10.1.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.1
-    - job_name: Release distribution (10.2.x)
+    - job_name: Release macOS distribution (10.2.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.2
-    - job_name: Release distribution (10.3.x)
+    - job_name: Release macOS distribution (10.3.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.3
-    - job_name: Release distribution (10.4.x)
+    - job_name: Release macOS distribution (10.4.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.4
     - job_name: Release distribution (10.5.x)
+      job_group: macOS
+      appveyor_build_worker_image: macos
       maria_db_series: 10.5
-build_script:
-  - sh: |
-      source ./create-macOS-binaries.sh
-      mariaDbVersion='latest'
-      mariaDbSeries=$maria_db_series
-      macOsMinVerToSupport='10.13' # High Sierra (September 2017)
-      gitHubCredentials="luigiberrettini:$GITHUB_TOKEN"
-      force=0
-      overwrite=0
-      releaseMariaDbBinaryDistribution \
-          $mariaDbVersion \
-          $mariaDbSeries \
-          $macOsMinVerToSupport \
-          $gitHubCredentials \
-          $force \
-          $overwrite
-      if [ $? -ne 0 ]; then
-          touch "$FAILURE_FILE_PATH"
-      fi
-test: off
-on_finish:
-  - sh: |
-      if [ ! -f "$FAILURE_FILE_PATH" ]; then
-          exit 0
-      fi
-      export APPVEYOR_SSH_BLOCK=true
-      curl -sflL 'https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-ssh.sh' | bash -e -
+    - job_name: Release Windows 32 bit distribution (5.1.x)
+      job_group: Windows
+      job_depends_on: macOS
+      appveyor_build_worker_image: Visual Studio 2017
+      maria_db_series: 5.1
+      os_architecture_bits: 32
+    - job_name: Release Windows 64 bit distribution (5.1.x)
+      job_group: Windows
+      job_depends_on: macOS
+      appveyor_build_worker_image: Visual Studio 2017
+      maria_db_series: 5.1
+      os_architecture_bits: 64
+for:
+  -
+    matrix:
+      only:
+        - job_group: macOS
+    environment:
+      FAILURE_FILE_PATH: /Users/appveyor/projects/failure
+    build_script:
+      - sh: |
+          source ./create-macOS-binaries.sh
+          mariaDbVersion='latest'
+          mariaDbSeries=$maria_db_series
+          macOsMinVerToSupport='10.13' # High Sierra (September 2017)
+          gitHubCredentials="luigiberrettini:$GITHUB_TOKEN"
+          force=0
+          overwrite=0
+          releaseMariaDbBinaryDistribution \
+              $mariaDbVersion \
+              $mariaDbSeries \
+              $macOsMinVerToSupport \
+              $gitHubCredentials \
+              $force \
+              $overwrite
+          if [ $? -ne 0 ]; then
+              touch "$FAILURE_FILE_PATH"
+          fi
+    test: off
+    on_finish:
+      - sh: |
+          if [ ! -f "$FAILURE_FILE_PATH" ]; then
+              exit 0
+          fi
+          export APPVEYOR_SSH_BLOCK=true
+          curl -sflL 'https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-ssh.sh' | bash -e -
+  -
+    matrix:
+      only:
+        - job_group: Windows
+    environment:
+      FAILURE_FILE_PATH: C:\Users\appveyor\projects\failure
+    build_script:
+      - pwsh: |
+          . .\create-Windows-binaries.ps1
+          $mariaDbVersion = 'latest'
+          $mariaDbSeries = $maria_db_series
+          $osArchitectureBits = $os_architecture_bits
+          $gitHubCredentials = "luigiberrettini:$GITHUB_TOKEN"
+          $visualStudioDir = 'C:\Program Files (x86)\Microsoft Visual Studio'
+          New-MariaDbBinaryDistribution `
+              $mariaDbVersion `
+              $mariaDbSeries `
+              $osArchitectureBits `
+              $gitHubCredentials `
+              $visualStudioDir
+          if ($LastExitCode -ne 0) || (-not $?)
+          {
+              $null > "$FAILURE_FILE_PATH"
+          }
+    test: off
+    on_finish:
+      - pwsh: |
+          if (!(Test-Path "$FAILURE_FILE_PATH"))
+          {
+              exit 0
+          }
+          $blockRdp = $true
+          $webClient = New-Object System.Net.WebClient
+          $enableRdpScriptUrl = 'https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'
+          Invoke-Expression ($webClient.DownloadString($enableRdpScriptUrl))

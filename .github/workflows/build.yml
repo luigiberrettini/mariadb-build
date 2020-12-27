@@ -8,42 +8,47 @@ on:
         - main
     workflow_dispatch:
 jobs:
-  set-matrix:
-    name: Set build matrix
+  set-macos-matrix:
+    name: Build matrix macOS
     runs-on: macos-latest
     outputs:
-      matrix: ${{steps.get-latest-version-per-series.outputs.matrix}}
+      matrix: ${{steps.get-binary-distributions-to-release.outputs.matrix}}
     steps:
-      - id: uninstall-openssl
-        name: Uninstall OpenSSL # https://github.com/actions/virtual-environments/issues/1811
-        run: brew uninstall openssl@1.0.2t
       - id: checkout-code
         name: Checkout code
         uses: actions/checkout@v2
-      - id: get-latest-version-per-series
-        name: Get latest version per series
+      - id: get-binary-distributions-to-release
+        name: Get binary distributions to release
         run: |
           gitHubCredentials="luigiberrettini:${{secrets.GITHUB_TOKEN}}"
+          overwrite=0
           source ${{github.workspace}}/create-macOS-binaries.sh
-          installPackageDependencies jq >/dev/null 2>&1
+          apiRepoBaseUrl=$(getApiRepoBaseUrl "${{github.workspace}}")
+          installPackageDependencies jq
           getMariaDbLatestVersionPerSeries \
               mariaDbLatestVersionPerSeries \
               $gitHubCredentials
-          mariaDbLatestVersionPerSeries=$(echo "$mariaDbLatestVersionPerSeries" | tr -d '\n| ')
-          echo "$mariaDbLatestVersionPerSeries"
-          echo "::set-output name=matrix::$mariaDbLatestVersionPerSeries"
-  release-distribution:
-    name: Release distribution
-    needs: set-matrix
+          getMariaDbLatestBinaryDistributionPerSeries \
+              mariaDbLatestDistributionPerSeries \
+              $apiRepoBaseUrl \
+              $gitHubCredentials
+          getMariaDbBinaryDistributionsToRelease \
+              mariaDbDistributionsToRelease \
+              $mariaDbLatestVersionPerSeries \
+              $mariaDbLatestDistributionPerSeries \
+              $overwrite
+          echo $mariaDbDistributionsToRelease
+          echo "::set-output name=matrix::$mariaDbDistributionsToRelease"
+  release-macos-distribution:
+    name: Binaries macOS
     runs-on: macos-latest
+    needs: set-macos-matrix
+    if: needs.set-macos-matrix.outputs.matrix != '[]'
     strategy:
       fail-fast: false
       matrix:
-        mariadb: ${{fromJson(needs.set-matrix.outputs.matrix)}}
+        mariadb: ${{fromJson(needs.set-macos-matrix.outputs.matrix)}}
     steps:
-      - id: uninstall-openssl
-        name: Uninstall OpenSSL # https://github.com/actions/virtual-environments/issues/1811
-        run: brew uninstall openssl@1.0.2t
       - id: checkout-code
         name: Checkout code
         uses: actions/checkout@v2
@@ -59,42 +64,15 @@ jobs:
         name: Install basic package dependencies
         run: |
           source ${{github.workspace}}/create-macOS-binaries.sh
-          installPackageDependencies jq >/dev/null 2>&1
+          installPackageDependencies jq
       - id: determine-mariadb-version-and-series
         name: Determine MariaDB version and series
         run: |
           source ${{github.workspace}}/create-macOS-binaries.sh
-          mariaDbVersion=$(getMariaDbVersion "$mariaDbLatestVersionPerSeries" ${{matrix.mariadb}})
+          mariaDbVersion="${{matrix.mariadb}}"
           mariaDbSeries=$(getMariaDbSeries $mariaDbVersion)
           echo "mariaDbVersion=$mariaDbVersion" >>$GITHUB_ENV
           echo "mariaDbSeries=$mariaDbSeries" >>$GITHUB_ENV
-      - id: prepare-for-execution
-        name: Prepare for execution
-        run: |
-          source ${{github.workspace}}/create-macOS-binaries.sh
-          echo "macOsMinVerToSupport=10.13" >>$GITHUB_ENV # High Sierra (September 2017)
-          echo "gitHubUsername=luigiberrettini" >>$GITHUB_ENV
-          echo "force=0" >>$GITHUB_ENV
-          echo "overwrite=0" >>$GITHUB_ENV
-          echo "apiRepoBaseUrl=$(getApiRepoBaseUrl ""${{github.workspace}}"")" >>$GITHUB_ENV
-          echo "macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport" >>$GITHUB_ENV
-          echo "openSslSourceDir=$workingDir/openssl/src" >>$GITHUB_ENV
-          echo "openSslCompiledDir=$workingDir/openssl/compiled" >>$GITHUB_ENV
-          echo "mariaDbSourceDir=$workingDir/mariadb/$mariaDbVersion/src" >>$GITHUB_ENV
-          echo "mariaDbBuildDir=$workingDir/mariadb/$mariaDbVersion/build" >>$GITHUB_ENV
-          echo "mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled" >>$GITHUB_ENV
-          echo "mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-macos-$mariaDbVersion.tar.gz" >>$GITHUB_ENV
-          echo "mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified" >>$GITHUB_ENV
-      - id: check-if-the-mariadb-version-has-no-released-binary-distribution
-        name: Check if the MariaDB version has no released binary distribution
-        run: |
-          source ${{github.workspace}}/create-macOS-binaries.sh
-          gitHubCredentials="$gitHubUsername:${{secrets.GITHUB_TOKEN}}"
-          ensureBinaryDistributionHasNeverBeenReleased \
-              $mariaDbVersion \
-              $overwrite \
-              $apiRepoBaseUrl \
-              $gitHubCredentials
       - id: install-build-related-package-dependencies
         name: Install build related package dependencies
         run: |
@@ -105,6 +83,21 @@ jobs:
               cmake \
               boost \
               gnutls
+      - id: prepare-for-execution
+        name: Prepare for execution
+        run: |
+          source ${{github.workspace}}/create-macOS-binaries.sh
+          echo "macOsMinVerToSupport=10.13" >>$GITHUB_ENV # High Sierra (September 2017)
+          echo "gitHubUsername=luigiberrettini" >>$GITHUB_ENV
+          echo "apiRepoBaseUrl=$(getApiRepoBaseUrl ""${{github.workspace}}"")" >>$GITHUB_ENV
+          echo "macOsSdkDir=$workingDir/macossdk/$macOsMinVerToSupport" >>$GITHUB_ENV
+          echo "openSslSourceDir=$workingDir/openssl/src" >>$GITHUB_ENV
+          echo "openSslCompiledDir=$workingDir/openssl/compiled" >>$GITHUB_ENV
+          echo "mariaDbSourceDir=$workingDir/mariadb/$mariaDbVersion/src" >>$GITHUB_ENV
+          echo "mariaDbBuildDir=$workingDir/mariadb/$mariaDbVersion/build" >>$GITHUB_ENV
+          echo "mariaDbCompiledDir=$workingDir/mariadb/$mariaDbVersion/compiled" >>$GITHUB_ENV
+          echo "mariaDbPackagePath=$workingDir/mariadb/$mariaDbVersion/packaged/mariadb-$mariaDbVersion-macos.tar.gz" >>$GITHUB_ENV
+          echo "mariaDbVerifiedDir=$workingDir/mariadb/$mariaDbVersion/verified" >>$GITHUB_ENV
       - id: install-the-latest-sdk-for-the-minimum-macos-version-to-support
         name: Install the latest SDK for the minimum macOS version to support
         run: |
@@ -152,4 +145,147 @@ jobs:
               $mariaDbVersion \
               $mariaDbPackagePath \
               $apiRepoBaseUrl \
+              $gitHubCredentials
+  set-windows-matrix:
+    name: Build matrix Windows
+    runs-on: windows-latest
+    needs: release-macos-distribution
+    if: always() && (needs.release-macos-distribution.result == 'success' || needs.release-macos-distribution.result == 'skipped')
+    outputs:
+      matrix: ${{steps.get-binary-distributions-to-release.outputs.matrix}}
+    steps:
+      - id: checkout-code
+        name: Checkout code
+        uses: actions/checkout@v2
+      - id: get-binary-distributions-to-release
+        name: Get binary distributions to release
+        run: |
+          $gitHubCredentials = "luigiberrettini:${{secrets.GITHUB_TOKEN}}"
+          $overwrite = $false
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          $apiRepoBaseUrl = Get-ApiRepoBaseUrl "${{github.workspace}}"
+          Install-PackageDependencies jq
+          $mariaDbLatestVersionPerSeries = Get-MariaDbLatestVersionPerSeries $gitHubCredentials
+          $mariaDbLatestDistributionPerSeries = Get-MariaDbLatestBinaryDistributionPerSeries `
+              $mariaDbLatestVersionPerSeries `
+              $OsArchitectureBits `
+              $apiRepoBaseUrl `
+              $gitHubCredentials
+          $mariaDbDistributionsToRelease = Get-MariaDbBinaryDistributionsToRelease `
+              $mariaDbLatestVersionPerSeries `
+              $mariaDbLatestDistributionPerSeries `
+              $overwrite
+          Write-Information $mariaDbDistributionsToRelease
+          Write-Output "::set-output name=matrix::$mariaDbDistributionsToRelease"
+  release-windows-distribution:
+    name: Binaries Windows
+    runs-on: windows-latest
+    needs: set-windows-matrix
+    if: always() && needs.set-windows-matrix.result == 'success' && needs.set-windows-matrix.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        mariadb: ${{fromJson(needs.set-windows-matrix.outputs.matrix)}}
+        bits: [32, 64]
+    steps:
+      - id: checkout-code
+        name: Checkout code
+        uses: actions/checkout@v2
+      - id: initialize
+        name: Initialize
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          $workingDir = Join-Path (Get-RootDir "${{github.workspace}}") 'work'
+          New-Item -Type Directory -Path $workingDir -ErrorAction SilentlyContinue | Out-Null
+          $apiRepoBaseUrl = Get-ApiRepoBaseUrl "${{github.workspace}}"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "workingDir=$workingDir"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "apiRepoBaseUrl=$apiRepoBaseUrl"
+      - id: install-basic-package-dependencies
+        name: Install basic package dependencies
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          Install-PackageDependencies jq
+      - id: determine-mariadb-version-and-series
+        name: Determine MariaDB version and series
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          $mariaDbVersion = "${{matrix.mariadb}}"
+          $mariaDbSeries = Get-MariaDbSeries $MariaDbVersion
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbVersion=$mariaDbVersion"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbSeries=$mariaDbSeries"
+      - id: install-build-related-package-dependencies
+        name: Install build related package dependencies
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          Install-PackageDependencies `
+              7zip.install `
+              cmake.install `
+              strawberryperl
+          if ($env:mariaDbSeries -eq '5.1' -or $env:mariaDbSeries -eq '5.2' -or $env:mariaDbSeries -ne '5.3') {
+              # Visual C++ 2008 Express (lacks x64 compilers)
+              #Install-PackageDependencies nsis visualcplusplusexpress2008 vcredist2008
+              # Visual C++ 2010 Express (lacks x64 compilers)
+              #Install-PackageDependencies nsis vcexpress2010 vcredist2010
+              # Visual Studio 2012 Professional
+              Install-PackageDependencies nsis visualstudio2012professional
+          }
+          else {
+              Install-PackageDependencies ruby visualstudio2017buildtools
+          }
+          Install-GnuSoftware `
+              'https://vorboss.dl.sourceforge.net/project/gnuwin32/bison/2.4.1/bison-2.4.1-setup.exe' `
+              "$env:workingDir" `
+              'bison'
+          Install-GnuSoftware `
+              'https://vorboss.dl.sourceforge.net/project/gnuwin32/diffutils/2.8.7-1/diffutils-2.8.7-1.exe' `
+              "$env:workingDir" `
+              'diff'
+          Add-Content -Path $env:GITHUB_PATH -Encoding UTF8 -Value "$env:workingDir\bison\bin"
+          Add-Content -Path $env:GITHUB_PATH -Encoding UTF8 -Value "$env:workingDir\diff\bin"
+      - id: prepare-for-execution
+        name: Prepare for execution
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          $workingDir = $env:workingDir
+          $osArchitectureBits = ${{matrix.bits}}
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "osArchitectureBits=$osArchitectureBits"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "gitHubUsername=luigiberrettini"
+          $mariaDbRootDir = "$env:workingDir\mariadb$osArchitectureBits\$env:mariaDbVersion"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbSourceDir=$mariaDbRootDir\src"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbBuildDir=$mariaDbRootDir\build"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbCompiledDir=$mariaDbRootDir\compiled"
+          $mariaDbPackageFile = "mariadb-$env:mariaDbVersion-win$(if ($OsArchitectureBits -eq 32) { '32' } else { 'x64' }).zip"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbPackagePath=$mariaDbRootDir\packaged\$mariaDbPackageFile"
+          Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbVerifiedDir=$mariaDbRootDir\verified"
+      - id: build-mariadb-from-sources
+        name: Build MariaDB from sources
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          Build-MariaDb `
+              $env:workingDir `
+              $env:mariaDbVersion `
+              $env:mariaDbSeries `
+              $env:osArchitectureBits `
+              $env:mariaDbSourceDir `
+              $env:mariaDbBuildDir `
+              $env:mariaDbCompiledDir `
+              $env:mariaDbPackagePath `
+              $env:mariaDbVerifiedDir
+      - id: publish-mariadb-binaries
+        name: Publish MariaDB binaries
+        run: |
+          $InformationPreference = 'Continue'
+          . ${{github.workspace}}\create-Windows-binaries.ps1
+          $gitHubCredentials = "luigiberrettini:${{secrets.GITHUB_TOKEN}}"
+          Publish-MariaDbBinaries `
+              $env:mariaDbVersion `
+              $env:mariaDbPackagePath `
+              $env:apiRepoBaseUrl `
               $gitHubCredentials
