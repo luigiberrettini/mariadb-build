@@ -167,27 +167,38 @@ jobs:
           $apiRepoBaseUrl = Get-ApiRepoBaseUrl "${{github.workspace}}"
           Install-PackageDependencies jq
           $mariaDbLatestVersionPerSeries = Get-MariaDbLatestVersionPerSeries $gitHubCredentials
-          $mariaDbLatestDistributionPerSeries = Get-MariaDbLatestBinaryDistributionPerSeries `
+          $mariaDbLatest32BitDistributionPerSeries = Get-MariaDbLatestBinaryDistributionPerSeries `
               $mariaDbLatestVersionPerSeries `
-              $OsArchitectureBits `
+              32 `
               $apiRepoBaseUrl `
               $gitHubCredentials
-          $mariaDbDistributionsToRelease = Get-MariaDbBinaryDistributionsToRelease `
+          $mariaDb32BitDistributionsToRelease = Get-MariaDbBinaryDistributionsToRelease `
               $mariaDbLatestVersionPerSeries `
-              $mariaDbLatestDistributionPerSeries `
-              $overwrite
+              $mariaDbLatest32BitDistributionPerSeries `
+              $overwrite |
+              jq '. | map({ "version": ., "bits": 32 })'
+          $mariaDbLatest64BitDistributionPerSeries = Get-MariaDbLatestBinaryDistributionPerSeries `
+              $mariaDbLatestVersionPerSeries `
+              64 `
+              $apiRepoBaseUrl `
+              $gitHubCredentials
+          $mariaDb64BitDistributionsToRelease = Get-MariaDbBinaryDistributionsToRelease `
+              $mariaDbLatestVersionPerSeries `
+              $mariaDbLatest64BitDistributionPerSeries `
+              $overwrite |
+              jq '. | map({ "version": ., "bits": 64 })'
+          $mariaDbDistributionsToRelease = ($mariaDb32BitDistributionsToRelease |
+              jq "{ include: (. + $($mariaDb64BitDistributionsToRelease -Replace '"', '\"')) }") -Replace '\s', '' -join ''
           Write-Information $mariaDbDistributionsToRelease
           Write-Output "::set-output name=matrix::$mariaDbDistributionsToRelease"
   release-windows-distribution:
     name: Binaries Windows
     runs-on: windows-latest
     needs: set-windows-matrix
-    if: always() && needs.set-windows-matrix.result == 'success' && needs.set-windows-matrix.outputs.matrix != '[]'
+    if: always() && needs.set-windows-matrix.result == 'success' && needs.set-windows-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
-      matrix:
-        mariadb: ${{fromJson(needs.set-windows-matrix.outputs.matrix)}}
-        bits: [32, 64]
+      matrix: ${{fromJson(needs.set-windows-matrix.outputs.matrix)}}
     steps:
       - id: checkout-code
         name: Checkout code
@@ -213,7 +224,7 @@ jobs:
         run: |
           $InformationPreference = 'Continue'
           . ${{github.workspace}}\create-Windows-binaries.ps1
-          $mariaDbVersion = "${{matrix.mariadb}}"
+          $mariaDbVersion = "${{matrix.version}}"
           $mariaDbSeries = Get-MariaDbSeries $MariaDbVersion
           Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbVersion=$mariaDbVersion"
           Add-Content -Path $env:GITHUB_ENV -Encoding UTF8 -Value "mariaDbSeries=$mariaDbSeries"
